@@ -22,6 +22,7 @@ class module_state(object):
         self.have_blueplane = False
         self.move_wp = -1
         self.moving_wp = False
+        self.brightness = 1
 
 def name():
     '''return module name'''
@@ -30,6 +31,18 @@ def name():
 def description():
     '''return module description'''
     return "map display"
+
+def cmd_map(args):
+    '''map commands'''
+    state = mpstate.map_state
+    if args[0] == "brightness":
+        if len(args) < 2:
+            print("Brightness %.1f" % state.brightness)
+        else:
+            state.brightness = float(args[1])
+            mpstate.map.add_object(mp_slipmap.SlipBrightness(state.brightness))
+    else:
+        print("usage: map <brightness>")
 
 def init(_mpstate):
     '''initialise module'''
@@ -45,12 +58,18 @@ def init(_mpstate):
                                                trail=mp_slipmap.SlipTrail()))
 
     mpstate.map.add_callback(functools.partial(map_callback))
+    mpstate.command_map['map'] = (cmd_map, "map control")
+
 
 def display_waypoints():
     '''display the waypoints'''
-    points = mpstate.status.wploader.polygon()
-    if len(points) > 1:
-        mpstate.map.add_object(mp_slipmap.SlipPolygon('mission', points, layer=1, linewidth=2, colour=(255,255,255)))
+    polygons = mpstate.status.wploader.polygon_list()
+    mpstate.map.add_object(mp_slipmap.SlipClearLayer('Mission'))
+    for i in range(len(polygons)):
+        p = polygons[i]
+        if len(p) > 1:
+            mpstate.map.add_object(mp_slipmap.SlipPolygon('mission%u' % i, p,
+                                                          layer='Mission', linewidth=2, colour=(255,255,255)))
 
 def closest_waypoint(latlon):
     '''find closest waypoint to a position'''
@@ -85,7 +104,7 @@ def map_callback(obj):
                 state.moving_wp = True
                 state.move_wp = wpnum
                 wp = mpstate.status.wploader.wp(state.move_wp)
-                print("Selected WP %u" % wpnum)
+                print("Selected WP %u : %s" % (wpnum, getattr(wp,'comment','')))
         else:
             wp = mpstate.status.wploader.wp(state.move_wp)
             (lat, lon) = obj.latlon

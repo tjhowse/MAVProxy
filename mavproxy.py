@@ -28,68 +28,7 @@ for d in [ 'pymavlink',
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), 'modules'))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), 'modules', 'lib'))
 
-import select, textconsole
-
-class MPSettings(object):
-    def __init__(self):
-        self.vars = [ ('link', int),
-                      ('altreadout', int),
-                      ('distreadout', int),
-                      ('battreadout', int),
-                      ('heartbeat', int),
-                      ('numcells', int),
-                      ('speech', int),
-                      ('mavfwd', int),
-                      ('mavfwd_rate', int),
-                      ('streamrate', int),
-                      ('streamrate2', int),
-                      ('heartbeatreport', int),
-                      ('radiosetup', int),
-                      ('paramretry', int),
-                      ('moddebug', int),
-                      ('rc1mul', int),
-                      ('rc2mul', int),
-                      ('rc4mul', int)]
-        self.link = 1
-        self.altreadout = 10
-        self.distreadout = 200
-        self.battreadout = 0
-        self.basealtitude = -1
-        self.heartbeat = 1
-        self.numcells = 0
-        self.mavfwd = 1
-        self.mavfwd_rate = 0
-        self.speech = 0
-        self.streamrate = 4
-        self.streamrate2 = 4
-        self.radiosetup = 0
-        self.heartbeatreport = 1
-        self.paramretry = 10
-        self.rc1mul = 1
-        self.rc2mul = 1
-        self.rc4mul = 1
-        self.moddebug = 0
-
-    def set(self, vname, value):
-        '''set a setting'''
-        for (v,t) in sorted(self.vars):
-            if v == vname:
-                try:
-                    value = t(value)
-                except:
-                    print("Unable to convert %s to type %s" % (value, t))
-                    return
-                setattr(self, vname, value)
-                return
-
-    def show(self, v):
-        '''show settings'''
-        print("%20s %s" % (v, getattr(self, v)))
-
-    def show_all(self):
-        '''show all settings'''
-        for (v,t) in sorted(self.vars):
-            self.show(v)
+import select, textconsole, mp_settings
 
 class MPStatus(object):
     '''hold status information about the mavproxy'''
@@ -175,7 +114,27 @@ class MPState(object):
     def __init__(self):
         self.console = textconsole.SimpleConsole()
         self.map = None
-        self.settings = MPSettings()
+        self.settings = mp_settings.MPSettings(
+            [ ('link', int, 1),
+              ('altreadout', int, 10),
+              ('distreadout', int, 200),
+              ('battreadout', int, 0),
+              ('heartbeat', int, 1),
+              ('numcells', int, 1),
+              ('speech', int, 0),
+              ('mavfwd', int, 1),
+              ('mavfwd_rate', int, 0),
+              ('streamrate', int, 4),
+              ('streamrate2', int, 4),
+              ('heartbeatreport', int, 1),
+              ('radiosetup', int, 0),
+              ('paramretry', int, 10),
+              ('moddebug', int, 0),
+              ('rc1mul', int, 1),
+              ('rc2mul', int, 1),
+              ('rc4mul', int, 1),
+              ('shownoise', int, 1)]
+            )
         self.status = MPStatus()
 
         # master mavlink device
@@ -330,6 +289,10 @@ def cmd_level(args):
     '''do a ground start mode'''
     mpstate.master().calibrate_level()
 
+def cmd_reboot(args):
+    '''reboot autopilot'''
+    mpstate.master().reboot_autopilot()
+
 def cmd_calpressure(args):
     '''calibrate pressure sensors'''
     mpstate.master().calibrate_pressure()
@@ -341,6 +304,15 @@ def cmd_rtl(args):
 def cmd_manual(args):
     '''set MANUAL mode'''
     mpstate.master().set_mode_manual()
+
+def cmd_servo(args):
+    '''set a servo'''
+    if len(args) != 2:
+        print("Usage: servo <channel> <pwmvalue>")
+        return
+    channel = int(args[0])
+    value   = int(args[1])
+    mpstate.master().set_servo(channel, value)
 
 def cmd_fbwa(args):
     '''set FBWA mode'''
@@ -653,6 +625,29 @@ def param_load_file(filename, wildcard):
         count += 1
     f.close()
     print("Loaded %u parameters from %s (changed %u)" % (count, filename, changed))
+
+def param_reload_file(filename):
+    '''reload parameters from a file'''
+    try:
+        f = open(filename, mode='r')
+    except:
+        print("Failed to open file '%s'" % filename)
+        return
+    count = 0
+    for line in f:
+        line = line.strip()
+        if not line or line[0] == "#":
+            continue
+        a = line.split()
+        if len(a) != 2:
+            print("Invalid line: %s" % line)
+            continue
+        mpstate.mav_param[a[0]] = float(a[1])
+        count += 1
+    f.close()
+    for master in mpstate.mav_master:
+        master.param_fetch_complete = True
+    print("Reloaded %u parameters from %s" % (count, filename))
     
 
 param_wildcard = "*"
@@ -858,6 +853,8 @@ command_map = {
     'bat'     : (cmd_bat,      'show battery levels'),
     'alt'     : (cmd_alt,      'show relative altitude'),
     'link'    : (cmd_link,     'show link status'),
+    'servo'   : (cmd_servo,    'set a servo value'),
+    'reboot'  : (cmd_reboot,   'reboot the autopilot'),
     'up'      : (cmd_up,       'adjust TRIM_PITCH_CD up by 5 degrees'),
     'watch'   : (cmd_watch,    'watch a MAVLink pattern'),
     'module'  : (cmd_module,   'module commands'),
@@ -1064,7 +1061,7 @@ def report_altitude(altitude):
     if (int(mpstate.settings.altreadout) > 0 and
         math.fabs(mpstate.status.altitude - mpstate.status.last_altitude_announce) >= int(mpstate.settings.altreadout)):
         mpstate.status.last_altitude_announce = mpstate.status.altitude
-        rounded_alt = int(mpstate.settings.altreadout) * ((5+int(mpstate.status.altitude - mpstate.settings.basealtitude)) / int(mpstate.settings.altreadout))
+        rounded_alt = int(mpstate.settings.altreadout) * ((5+int(mpstate.status.altitude)) / int(mpstate.settings.altreadout))
         say("height %u" % rounded_alt, priority='notification')
     
 
@@ -1258,21 +1255,13 @@ def master_callback(m, master):
         report_altitude(m.relative_alt*0.001)
 
     elif mtype == "BAD_DATA":
-        if mavutil.all_printable(m.data):
+        if mpstate.settings.shownoise and mavutil.all_printable(m.data):
             mpstate.console.write(str(m.data), bg='red')
-    elif mtype in [ 'HEARTBEAT', 'GLOBAL_POSITION', 'RC_CHANNELS_SCALED',
-                    'ATTITUDE', 'RC_CHANNELS_RAW', 'GPS_STATUS', 'WAYPOINT_CURRENT',
-                    'SERVO_OUTPUT_RAW', 'VFR_HUD',
-                    'GLOBAL_POSITION_INT', 'RAW_PRESSURE', 'RAW_IMU',
-                    'WAYPOINT_ACK', 'MISSION_ACK',
-                    'NAV_CONTROLLER_OUTPUT', 'GPS_RAW', 'GPS_RAW_INT', 'WAYPOINT',
-                    'SCALED_PRESSURE', 'SENSOR_OFFSETS', 'MEMINFO', 'AP_ADC',
-                    'FENCE_POINT', 'FENCE_STATUS', 'DCM', 'RADIO', 'AHRS', 'HWSTATUS',
-                    'SIMSTATE', 'PPP', 'WIND', 'MISSION_ITEM',
-                    'DATA16', 'DATA32', 'DATA64' ]:
-        pass
-    else:
+    elif mtype in [ "COMMAND_ACK" ]:
         mpstate.console.writeln("Got MAVLink msg: %s" % m)
+    else:
+        #mpstate.console.writeln("Got MAVLink msg: %s" % m)
+        pass
 
     if mpstate.status.watch is not None:
         if fnmatch.fnmatch(m.get_type().upper(), mpstate.status.watch.upper()):
@@ -1495,7 +1484,8 @@ def main_loop():
     if not mpstate.status.setup_mode and not opts.nowait:
         for master in mpstate.mav_master:
             master.wait_heartbeat()
-            master.param_fetch_all()
+            if len(mpstate.mav_param) < 10 or not mpstate.continue_mode:
+                master.param_fetch_all()
         set_stream_rates()
 
     while True:
@@ -1693,12 +1683,17 @@ Auto-detected serial ports are:
     open_logs()
 
     if mpstate.continue_mode and mpstate.status.logdir != None:
+        parmfile = os.path.join(mpstate.status.logdir, 'mav.parm')
+        if os.path.exists(parmfile):
+            param_reload_file(parmfile)
         waytxt = os.path.join(mpstate.status.logdir, 'way.txt')
         if os.path.exists(waytxt):
             mpstate.status.wploader.load(waytxt)
+            print("Loaded waypoints from %s" % waytxt)
         fencetxt = os.path.join(mpstate.status.logdir, 'fence.txt')
         if os.path.exists(fencetxt):
             mpstate.status.fenceloader.load(fencetxt) 
+            print("Loaded fence from %s" % fencetxt)
 
     # open any mavlink UDP ports
     for p in opts.output:
