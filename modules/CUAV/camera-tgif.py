@@ -31,7 +31,7 @@ class camera_state(object):
         self.capture_thread = None
         self.save_thread = None
         self.scan_thread1 = None
-        self.scan_thread2 = None
+        #self.scan_thread2 = None
         self.transmit_thread = None
         self.view_thread = None
 
@@ -132,6 +132,9 @@ def description():
 def cmd_camera(args):
     '''camera commands'''
     state = mpstate.camera_state
+    if not args:
+        print("usage: camera <start|stop|status|view|noview|gcs|brightness|capbrightness|boundary|bandwidth|bandwidth2|thumbsize|transmit|loss|save|minscore|altitude|send2>")
+        return
     if args[0] == "start":
         state.capture_count = 0
         state.error_count = 0
@@ -324,18 +327,22 @@ def capture_thread():
         try:
             if h is None:
                 h, base_time, last_frame_time = get_base_time()
-                # put into continuous mode
+               # put into continuous mode
                 chameleon.trigger(h, True)
 
             capture_time = time.time()
             if state.depth == 16:
-                im = numpy.zeros((600,800),dtype='uint16')
+                im = numpy.zeros((600,800,3),dtype='uint16')
             else:
-                im = numpy.zeros((600,800),dtype='uint8')
+                im = numpy.zeros((600,800,3),dtype='uint8')
+            #im = numpy.zeros((600,800),dtype='uint16')
+            
             if last_gamma != state.gamma:
                 chameleon.set_gamma(h, state.gamma)
                 last_gamma = state.gamma
             frame_time, frame_counter, shutter = chameleon.capture(h, 1000, im)
+            #cv.SaveImage("/home/root/opencv/blob/captures/downsampled.jpg",cv.fromarray(im))
+            #cv.cvSaveImage("/tmp/test.jpg",im)
             if frame_time < last_frame_time:
                 base_time += 128
             if last_frame_counter != 0:
@@ -389,20 +396,24 @@ def scan_thread():
             continue
 
         t1 = time.time()
-        im_full = numpy.zeros((480,800,3),dtype='uint8')
+        #im_full = numpy.zeros((600,800,3),dtype='uint8')
         im_640 = numpy.zeros((480,640,3),dtype='uint8')
         #scanner.debayer_full(im, im_full)
-        scanner.downsample(im_full, im_640)
+        #scanner.downsample(im_full, im_640)
+        #cv.SaveImage("/tmp/downsampled.jpg",cv.fromarray(im))
+        scanner.downsample(im, im_640)
         regions = cuav_region.RegionsConvert(scanner.scan(im_640))
         t2 = time.time()
         state.scan_fps = 1.0 / (t2-t1)
         state.scan_count += 1
-
-        regions = cuav_region.filter_regions(im_full, regions, min_score=state.minscore)
-
+        print regions
+        #regions = cuav_region.filter_regions(im, regions, min_score=state.minscore)
+        regions = cuav_region.filter_regions(im, regions, min_score=0)
+        #regions = cuav_region.filter_regions(im_full, regions, min_score=state.minscore)
+        print regions
         state.region_count += len(regions)
         if state.transmit_queue.qsize() < 100:
-            state.transmit_queue.put((frame_time, regions, im_full, im_640))
+            state.transmit_queue.put((frame_time, regions, im, im_640))
 
 def get_plane_position(frame_time,roll=None):
     '''get a MavPosition object for the planes position if possible'''
