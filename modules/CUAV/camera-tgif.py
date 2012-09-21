@@ -363,7 +363,8 @@ def capture_thread():
 
             last_frame_time = frame_time
             last_frame_counter = frame_counter
-        except chameleon.error, msg:
+        #except chameleon.error, msg:
+        except Exception, msg:
             state.error_count += 1
             state.error_msg = msg
     if h is not None:
@@ -389,7 +390,7 @@ def scan_thread():
     while not state.unload.wait(0.02):
         try:
             # keep the queue size below 100, so we don't run out of memory
-            if state.scan_queue.qsize() > 100:
+            if state.scan_queue.qsize() > 25:
                 (frame_time,im) = state.scan_queue.get(timeout=0.2)
             (frame_time,im) = state.scan_queue.get(timeout=0.2)
         except Queue.Empty:
@@ -402,6 +403,8 @@ def scan_thread():
         #scanner.downsample(im_full, im_640)
         #cv.SaveImage("/tmp/downsampled.jpg",cv.fromarray(im))
         scanner.downsample(im, im_640)
+        #cv.SaveImage("/tmp/downsampled.jpg",cv.fromarray(im))
+        #cv.SaveImage("/tmp/downsampled_640.jpg",cv.fromarray(im_640))
         regions = cuav_region.RegionsConvert(scanner.scan(im_640))
         t2 = time.time()
         state.scan_fps = 1.0 / (t2-t1)
@@ -412,7 +415,8 @@ def scan_thread():
         #regions = cuav_region.filter_regions(im_full, regions, min_score=state.minscore)
         print regions
         state.region_count += len(regions)
-        if state.transmit_queue.qsize() < 100:
+        if state.transmit_queue.qsize() < 50:
+        #if state.transmit_queue.qsize() < 2:
             state.transmit_queue.put((frame_time, regions, im, im_640))
 
 def get_plane_position(frame_time,roll=None):
@@ -469,7 +473,7 @@ def transmit_thread():
     skip_count = 0
     bsend = block_xmit.BlockSender(0, state.bandwidth, debug=False)
     state.bsocket = MavSocket(mpstate.mav_master[0])
-    state.bsend2 = block_xmit.BlockSender(mss=59, sock=state.bsocket, dest_ip='mavlink', dest_port=0, backlog=5, debug=False)
+    state.bsend2 = block_xmit.BlockSender(mss=59, sock=state.bsocket, dest_ip='mavlink', dest_port=0, backlog=5, debug=True)
     state.bsend2.set_bandwidth(state.bandwidth2)
 
     while not state.unload.wait(0.02):
@@ -502,6 +506,7 @@ def transmit_thread():
         jpeg = None
 
         if len(regions) > 0 and bsend.sendq_size() < 2000:
+            #print "About to send packets"
             # send a region message with thumbnails to the ground station
             thumb = cuav_mosaic.CompositeThumbnail(cv.GetImage(cv.fromarray(im_full)),
                                                    regions, quality=state.quality, thumb_size=state.thumbsize)
@@ -512,11 +517,13 @@ def transmit_thread():
             # send matches with a higher priority
             if state.transmit:
                 buf = cPickle.dumps(pkt, cPickle.HIGHEST_PROTOCOL)
-                bsend.send(buf,
-                           dest=(state.gcs_address, state.gcs_view_port),
-                           priority=1)
+                #bsend.send(buf,
+                #           dest=(state.gcs_address, state.gcs_view_port),
+                #           priority=1)
                 # also send thumbnails via 900MHz telemetry
+                #print "About to send.."
                 if state.send2:
+                    print "Sending now.."
                     state.bsend2.set_bandwidth(state.bandwidth2)
                     state.bsend2.send(buf, priority=1)
 
@@ -737,7 +744,7 @@ def unload():
         mpstate.camera_state.capture_thread.join(1.0)
         mpstate.camera_state.save_thread.join(1.0)
         mpstate.camera_state.scan_thread1.join(1.0)
-        mpstate.camera_state.scan_thread2.join(1.0)
+        #mpstate.camera_state.scan_thread2.join(1.0)
         mpstate.camera_state.transmit_thread.join(1.0)
     if mpstate.camera_state.view_thread is not None:
         mpstate.camera_state.view_thread.join(1.0)
